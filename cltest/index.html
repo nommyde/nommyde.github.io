@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Color Line Test</title>
+<style>
+  html, body { margin: 0; overflow: hidden; background: #000; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  #controls { display: flex; gap: 6px; padding: 10px 10px 0; }
+  #c { display: block; flex: 1; min-height: 0; width: 100%; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <select id="gamma">
+    <option value="srgb">sRGB</option>
+    <option value="2.2">Gamma 2.2</option>
+  </select>
+  <select id="pattern">
+    <option value="rows">Horizontal lines</option>
+    <option value="cols">Vertical lines</option>
+    <option value="checker">Checkerboard</option>
+  </select>
+</div>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const gammaSel = document.getElementById('gamma');
+const patternSel = document.getElementById('pattern');
+
+// Padding from the window edges and between stripes, in physical pixels
+const PAD = 10;
+
+// decode: code 0..1 → linear light 0..1, encode: the reverse
+const curves = {
+  srgb: {
+    decode: c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
+    encode: l => l <= 0.0031308 ? l * 12.92 : 1.055 * l ** (1 / 2.4) - 0.055,
+  },
+  '2.2': {
+    decode: c => c ** 2.2,
+    encode: l => l ** (1 / 2.2),
+  },
+};
+
+// Which of the two hatching values a pixel gets
+const phases = {
+  rows: (x, y) => y & 1,
+  cols: (x, y) => x & 1,
+  checker: (x, y) => (x + y) & 1,
+};
+
+const to8 = v => Math.round(v * 255);
+
+function render() {
+  const w = canvas.width, h = canvas.height;
+  const { decode, encode } = curves[gammaSel.value];
+  const phase = phases[patternSel.value];
+
+  const img = ctx.createImageData(w, h);
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
+
+  const areaW = w - 4 * PAD; // three stripes and four gaps
+  const areaH = h - 2 * PAD;
+  if (areaW >= 3 && areaH >= 2) {
+    const pairs = Math.ceil(areaH / 2);
+    for (let y = 0; y < areaH; y++) {
+      // Level is constant within a pair of rows, brighter at the top
+      const solid = to8(1 - ((y >> 1) + 0.5) / pairs);
+      const L = decode(solid / 255);
+      // Two values whose average linear light equals L: 0 and 2L, or 2L−1 and 255.
+      // The brighter one is always on phase 1, otherwise the alternation breaks at L = 0.5
+      const [lo, hi] = L <= 0.5
+        ? [0, to8(encode(2 * L))]
+        : [to8(encode(2 * L - 1)), 255];
+
+      for (let ch = 0; ch < 3; ch++) {
+        // In stripe ch, channel ch is hatched, the other two are filled with solid
+        const x0 = PAD + ch * PAD + Math.round(ch * areaW / 3);
+        const x1 = PAD + ch * PAD + Math.round((ch + 1) * areaW / 3);
+        for (let x = x0; x < x1; x++) {
+          const i = ((y + PAD) * w + x) * 4;
+          d[i] = d[i + 1] = d[i + 2] = solid;
+          d[i + ch] = phase(x, y) ? hi : lo;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+gammaSel.addEventListener('change', render);
+patternSel.addEventListener('change', render);
+
+const ro = new ResizeObserver(([entry]) => {
+  let w, h;
+  if (entry.devicePixelContentBoxSize) {
+    // Exact size in physical pixels
+    w = entry.devicePixelContentBoxSize[0].inlineSize;
+    h = entry.devicePixelContentBoxSize[0].blockSize;
+  } else {
+    // Fallback for browsers without support
+    const dpr = window.devicePixelRatio;
+    w = Math.round(entry.contentBoxSize[0].inlineSize * dpr);
+    h = Math.round(entry.contentBoxSize[0].blockSize * dpr);
+  }
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    render();
+  }
+});
+
+try {
+  ro.observe(canvas, { box: 'device-pixel-content-box' });
+} catch {
+  ro.observe(canvas, { box: 'content-box' });
+}
+</script>
+</body>
+</html>
